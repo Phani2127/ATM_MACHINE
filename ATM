@@ -1,0 +1,277 @@
+import java.sql.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Scanner;
+
+public class OnlineBankingSystem {
+
+    private static final String URL = "jdbc:sqlite:banking.db";
+
+    public static void main(String[] args) {
+        createTables();
+        Scanner scanner = new Scanner(System.in);
+
+        System.out.println("Welcome to the Online Banking System");
+        System.out.print("Enter your name: ");
+        String name = scanner.nextLine();
+        System.out.print("Enter your PIN: ");
+        String pin = scanner.nextLine();
+
+        User user = User.authenticate(name, pin);
+        if (user == null) {
+            System.out.println("Invalid credentials.");
+            return;
+        }
+
+        System.out.println("Login successful!");
+
+        while (true) {
+            System.out.println("1. View Balance");
+            System.out.println("2. Deposit");
+            System.out.println("3. Withdraw");
+            System.out.println("4. View Transactions");
+            System.out.println("5. Exit");
+            System.out.print("Choose an option: ");
+            int option = scanner.nextInt();
+
+            if (option == 5) {
+                break;
+            }
+
+            System.out.print("Enter account type (savings/checking): ");
+            String accountType = scanner.next();
+            Account account = Account.getAccount(user.getId(), accountType);
+
+            if (account == null) {
+                System.out.println("Account not found.");
+                continue;
+            }
+
+            switch (option) {
+                case 1:
+                    System.out.println("Balance: " + account.getBalance());
+                    break;
+                case 2:
+                    System.out.print("Enter amount to deposit: ");
+                    double depositAmount = scanner.nextDouble();
+                    account.deposit(depositAmount);
+                    Transaction.addTransaction(account.getId(), "deposit", depositAmount);
+                    System.out.println("Deposit successful.");
+                    break;
+                case 3:
+                    System.out.print("Enter amount to withdraw: ");
+                    double withdrawAmount = scanner.nextDouble();
+                    account.withdraw(withdrawAmount);
+                    Transaction.addTransaction(account.getId(), "withdraw", withdrawAmount);
+                    System.out.println("Withdrawal successful.");
+                    break;
+                case 4:
+                    System.out.println("Transaction History:");
+                    for (Transaction transaction : Transaction.getTransactions(account.getId())) {
+                        System.out.println(transaction);
+                    }
+                    break;
+                default:
+                    System.out.println("Invalid option.");
+            }
+        }
+
+        scanner.close();
+    }
+
+    private static void createTables() {
+        String createUsersTable = "CREATE TABLE IF NOT EXISTS users (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT," +
+                "name TEXT NOT NULL," +
+                "pin TEXT NOT NULL" +
+                ");";
+
+        String createAccountsTable = "CREATE TABLE IF NOT EXISTS accounts (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT," +
+                "user_id INTEGER NOT NULL," +
+                "type TEXT NOT NULL," +
+                "balance REAL NOT NULL," +
+                "FOREIGN KEY (user_id) REFERENCES users (id)" +
+                ");";
+
+        String createTransactionsTable = "CREATE TABLE IF NOT EXISTS transactions (" +
+                "id INTEGER PRIMARY KEY AUTOINCREMENT," +
+                "account_id INTEGER NOT NULL," +
+                "type TEXT NOT NULL," +
+                "amount REAL NOT NULL," +
+                "date TEXT NOT NULL," +
+                "FOREIGN KEY (account_id) REFERENCES accounts (id)" +
+                ");";
+
+        try (Connection conn = connect();
+             Statement stmt = conn.createStatement()) {
+            stmt.execute(createUsersTable);
+            stmt.execute(createAccountsTable);
+            stmt.execute(createTransactionsTable);
+        } catch (SQLException e) {
+            System.out.println(e.getMessage());
+        }
+    }
+
+    private static Connection connect() {
+        Connection conn = null;
+        try {
+            conn = DriverManager.getConnection(URL);
+        } catch (SQLException e) {
+            System.out.println(e.getMessage());
+        }
+        return conn;
+    }
+
+    static class User {
+        private int id;
+        private String name;
+        private String pin;
+
+        public User(int id, String name, String pin) {
+            this.id = id;
+            this.name = name;
+            this.pin = pin;
+        }
+
+        public int getId() {
+            return id;
+        }
+
+        public static User authenticate(String name, String pin) {
+            String sql = "SELECT * FROM users WHERE name = ? AND pin = ?";
+            try (Connection conn = connect();
+                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setString(1, name);
+                pstmt.setString(2, pin);
+                ResultSet rs = pstmt.executeQuery();
+                if (rs.next()) {
+                    return new User(rs.getInt("id"), rs.getString("name"), rs.getString("pin"));
+                }
+            } catch (SQLException e) {
+                System.out.println(e.getMessage());
+            }
+            return null;
+        }
+    }
+
+    static class Account {
+        private int id;
+        private int userId;
+        private String type;
+        private double balance;
+
+        public Account(int id, int userId, String type, double balance) {
+            this.id = id;
+            this.userId = userId;
+            this.type = type;
+            this.balance = balance;
+        }
+
+        public int getId() {
+            return id;
+        }
+
+        public double getBalance() {
+            return balance;
+        }
+
+        public static Account getAccount(int userId, String type) {
+            String sql = "SELECT * FROM accounts WHERE user_id = ? AND type = ?";
+            try (Connection conn = connect();
+                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setInt(1, userId);
+                pstmt.setString(2, type);
+                ResultSet rs = pstmt.executeQuery();
+                if (rs.next()) {
+                    return new Account(rs.getInt("id"), rs.getInt("user_id"), rs.getString("type"), rs.getDouble("balance"));
+                }
+            } catch (SQLException e) {
+                System.out.println(e.getMessage());
+            }
+            return null;
+        }
+
+        public void deposit(double amount) {
+            this.balance += amount;
+            updateBalance();
+        }
+
+        public void withdraw(double amount) {
+            if (this.balance >= amount) {
+                this.balance -= amount;
+                updateBalance();
+            } else {
+                System.out.println("Insufficient funds.");
+            }
+        }
+
+        private void updateBalance() {
+            String sql = "UPDATE accounts SET balance = ? WHERE id = ?";
+            try (Connection conn = connect();
+                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setDouble(1, this.balance);
+                pstmt.setInt(2, this.id);
+                pstmt.executeUpdate();
+            } catch (SQLException e) {
+                System.out.println(e.getMessage());
+            }
+        }
+    }
+
+    static class Transaction {
+        private int id;
+        private int accountId;
+        private String type;
+        private double amount;
+        private String date;
+
+        public Transaction(int id, int accountId, String type, double amount, String date) {
+            this.id = id;
+            this.accountId = accountId;
+            this.type = type;
+            this.amount = amount;
+            this.date = date;
+        }
+
+        @Override
+        public String toString() {
+            return "Transaction{" +
+                    "id=" + id +
+                    ", accountId=" + accountId +
+                    ", type='" + type + '\'' +
+                    ", amount=" + amount +
+                    ", date='" + date + '\'' +
+                    '}';
+        }
+
+        public static List<Transaction> getTransactions(int accountId) {
+            List<Transaction> transactions = new ArrayList<>();
+            String sql = "SELECT * FROM transactions WHERE account_id = ?";
+            try (Connection conn = connect();
+                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setInt(1, accountId);
+                ResultSet rs = pstmt.executeQuery();
+                while (rs.next()) {
+                    transactions.add(new Transaction(rs.getInt("id"), rs.getInt("account_id"), rs.getString("type"), rs.getDouble("amount"), rs.getString("date")));
+                }
+            } catch (SQLException e) {
+                System.out.println(e.getMessage());
+            }
+            return transactions;
+        }
+
+        public static void addTransaction(int accountId, String type, double amount) {
+            String sql = "INSERT INTO transactions(account_id, type, amount, date) VALUES(?, ?, ?, datetime('now'))";
+            try (Connection conn = connect();
+                 PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setInt(1, accountId);
+                pstmt.setString(2, type);
+                pstmt.setDouble(3, amount);
+                pstmt.executeUpdate();
+            } catch (SQLException e) {
+                System.out.println(e.getMessage());
+            }
+        }
+    }
+}
